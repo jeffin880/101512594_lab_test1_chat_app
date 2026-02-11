@@ -1,0 +1,251 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Chat</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    #chatBox { height: 420px; overflow-y: auto; background: #fff; border:1px solid #ddd; padding:10px; }
+    .msg { margin: 6px 0; }
+    .sys { color:#888; font-style: italic; }
+    .mine { font-weight: 600; }
+    .tabbtn.active { font-weight:700; }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="m-0">Chat Application</h3>
+    <button id="logout" class="btn btn-outline-danger btn-sm">Logout</button>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-3">
+      <div class="card p-3">
+        <div class="small text-muted mb-2">
+          Logged in as: <b id="me"></b>
+        </div>
+
+        <!-- MODE BUTTONS -->
+        <div class="btn-group w-100 mb-3">
+          <button id="modeRoom" class="btn btn-outline-primary tabbtn active">Room</button>
+          <button id="modePrivate" class="btn btn-outline-primary tabbtn">Private</button>
+        </div>
+
+        <!-- ROOM PANEL -->
+        <div id="roomPanel">
+          <div class="fw-bold mb-2">Rooms</div>
+          <select id="roomSelect" class="form-select mb-2">
+            <option>devops</option>
+            <option>cloud computing</option>
+            <option>covid19</option>
+            <option>sports</option>
+            <option>nodeJS</option>
+          </select>
+          <button id="join" class="btn btn-success w-100 mb-2">Join Room</button>
+          <button id="leave" class="btn btn-secondary w-100">Leave Room</button>
+
+          <div class="mt-3 small text-muted">
+            Current room: <span id="currentRoom">none</span>
+          </div>
+        </div>
+
+        <!-- PRIVATE PANEL -->
+        <div id="privatePanel" style="display:none;">
+          <div class="fw-bold mb-2">Users</div>
+          <select id="userSelect" class="form-select mb-2"></select>
+          <button id="loadPrivate" class="btn btn-dark w-100">Open Chat</button>
+
+          <div class="mt-3 small text-muted">
+            Chatting with: <span id="currentUser">none</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="col-md-9">
+      <div id="chatTitle" class="mb-2 fw-bold">Room Chat</div>
+      <div id="chatBox" class="rounded"></div>
+      <div id="typing" class="small text-muted mt-1"></div>
+
+      <div class="input-group mt-2">
+        <input id="message" class="form-control" placeholder="Type a message...">
+        <button id="send" class="btn btn-primary">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script>
+const user = JSON.parse(localStorage.getItem("user") || "null");
+if (!user) window.location.href = "./login.html";
+$("#me").text(user.username);
+
+const socket = io();
+socket.emit("registerUser", { username: user.username });
+
+let mode = "room"; 
+let currentRoom = null;
+let currentPrivateUser = null;
+let typingTimer = null;
+
+function addLine(html) {
+  $("#chatBox").append(html);
+  $("#chatBox").scrollTop($("#chatBox")[0].scrollHeight);
+}
+function clearChat() {
+  $("#chatBox").html("");
+  $("#typing").text("");
+}
+
+
+$("#modeRoom").click(() => {
+  mode = "room";
+  $(".tabbtn").removeClass("active");
+  $("#modeRoom").addClass("active");
+  $("#roomPanel").show();
+  $("#privatePanel").hide();
+  $("#chatTitle").text("Room Chat");
+  clearChat();
+});
+
+$("#modePrivate").click(() => {
+  mode = "private";
+  $(".tabbtn").removeClass("active");
+  $("#modePrivate").addClass("active");
+  $("#roomPanel").hide();
+  $("#privatePanel").show();
+  $("#chatTitle").text("Private Chat");
+  clearChat();
+  loadUsers();
+});
+
+// --------------------- ROOM CHAT ---------------------
+$("#join").click(() => {
+  const room = $("#roomSelect").val();
+  currentRoom = room;
+  $("#currentRoom").text(room);
+  clearChat();
+  socket.emit("joinRoom", { username: user.username, room });
+});
+
+$("#leave").click(() => {
+  if (!currentRoom) return;
+  socket.emit("leaveRoom", { username: user.username, room: currentRoom });
+  currentRoom = null;
+  $("#currentRoom").text("none");
+});
+
+socket.on("roomHistory", (msgs) => {
+  msgs.forEach(m => addLine(`<div class="msg"><b>${m.from_user}</b>: ${m.message}</div>`));
+});
+
+socket.on("system", (text) => addLine(`<div class="msg sys">${text}</div>`));
+
+socket.on("groupMessage", (m) => {
+  addLine(`<div class="msg"><b>${m.from_user}</b>: ${m.message}</div>`);
+});
+
+// room typing
+socket.on("typing", ({ username, isTyping }) => {
+  if (mode !== "room") return;
+  $("#typing").text(isTyping ? `${username} is typing...` : "");
+});
+
+// --------------------- PRIVATE CHAT ---------------------
+async function loadUsers() {
+  const res = await fetch("/api/users");
+  const users = await res.json();
+  const others = users.filter(u => u.username !== user.username);
+
+  $("#userSelect").html("");
+  others.forEach(u => {
+    $("#userSelect").append(`<option value="${u.username}">${u.username}</option>`);
+  });
+}
+
+$("#loadPrivate").click(async () => {
+  const target = $("#userSelect").val();
+  if (!target) return;
+  currentPrivateUser = target;
+  $("#currentUser").text(target);
+  clearChat();
+
+  const res = await fetch(`/api/messages/private?a=${encodeURIComponent(user.username)}&b=${encodeURIComponent(target)}`);
+  const msgs = await res.json();
+  msgs.forEach(m => {
+    const who = m.from_user === user.username ? `<span class="mine">${m.from_user}</span>` : `<b>${m.from_user}</b>`;
+    addLine(`<div class="msg">${who}: ${m.message}</div>`);
+  });
+});
+
+socket.on("privateMessage", (m) => {
+  if (mode !== "private") return;
+
+  const ok =
+    (m.from_user === user.username && m.to_user === currentPrivateUser) ||
+    (m.from_user === currentPrivateUser && m.to_user === user.username);
+
+  if (!ok) return;
+
+  const who = m.from_user === user.username ? `<span class="mine">${m.from_user}</span>` : `<b>${m.from_user}</b>`;
+  addLine(`<div class="msg">${who}: ${m.message}</div>`);
+});
+
+// private typing (1-to-1)
+socket.on("typingPrivate", ({ from_user, isTyping }) => {
+  if (mode !== "private") return;
+  if (from_user !== currentPrivateUser) return;
+  $("#typing").text(isTyping ? `${from_user} is typing...` : "");
+});
+
+// --------------------- SEND MESSAGE ---------------------
+$("#send").click(() => {
+  const msg = $("#message").val().trim();
+  if (!msg) return;
+
+  if (mode === "room") {
+    if (!currentRoom) return;
+    socket.emit("groupMessage", { from_user: user.username, room: currentRoom, message: msg });
+  } else {
+    if (!currentPrivateUser) return;
+    socket.emit("privateMessage", { from_user: user.username, to_user: currentPrivateUser, message: msg });
+  }
+
+  $("#message").val("");
+  $("#typing").text("");
+});
+
+
+$("#message").on("input", () => {
+  clearTimeout(typingTimer);
+
+  if (mode === "room") {
+    if (!currentRoom) return;
+
+    socket.emit("typing", { username: user.username, room: currentRoom, isTyping: true });
+    typingTimer = setTimeout(() => {
+      socket.emit("typing", { username: user.username, room: currentRoom, isTyping: false });
+    }, 800);
+
+  } else {
+    if (!currentPrivateUser) return;
+
+    socket.emit("typingPrivate", { from_user: user.username, to_user: currentPrivateUser, isTyping: true });
+    typingTimer = setTimeout(() => {
+      socket.emit("typingPrivate", { from_user: user.username, to_user: currentPrivateUser, isTyping: false });
+    }, 800);
+  }
+});
+
+// --------------------- LOGOUT ---------------------
+$("#logout").click(() => {
+  localStorage.removeItem("user");
+  window.location.href = "./login.html";
+});
+</script>
+</body>
+</html>
